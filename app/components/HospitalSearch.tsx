@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Hospital } from '@/lib/models/Hospital';
 
 export default function HospitalSearch() {
   const [latitude, setLatitude] = useState<number | null>(null);

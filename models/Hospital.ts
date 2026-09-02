@@ -23,20 +23,5 @@ const HospitalSchema = new Schema({
 // 2dsphere index is vital for $near queries
 HospitalSchema.index({ location: "2dsphere" });
 
-// Attach the static method directly to the schema
-HospitalSchema.statics.getNearbyHospitals = async function(userLat: number, userLng: number, radiusKm: number) {
-  return await this.find({
-    location: {
-      $near: {
-        $geometry: {
-          type: "Point",
-          coordinates: [userLng, userLat] // Longitude first!
-        },
-        $maxDistance: radiusKm * 1000 
-      }
-    }
-  });
-};
-
 const HospitalModel = models.Hospital || model("Hospital", HospitalSchema);
 export default HospitalModel;
