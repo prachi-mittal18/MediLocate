@@ -3,7 +3,8 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { Siren, ChevronRight, PhoneCall, MessageSquare, ShieldAlert, X, MapPin, ExternalLink, LocateFixed } from "lucide-react";
+import { Siren, PhoneCall, MessageSquare, ShieldAlert, X, MapPin, ExternalLink, LocateFixed } from "lucide-react";
+import { rankHospitalsWithDemoReviews } from "@/lib/hospitalReviews";
 
 let L: any = null;
 
@@ -32,6 +33,10 @@ const formatHospitalDistance = (distanceKm: number | null) => {
 
   return `${distanceKm.toFixed(1)} km away`;
 };
+
+
+
+
 
 const getHospitalMapsUrl = (
   hospital: any,
@@ -107,10 +112,31 @@ export default function HospitalsPage() {
   const [step, setStep] = useState(1); 
   const [leafletReady, setLeafletReady] = useState(false);
   const [userPos, setUserPos] = useState<[number, number] | null>(null);
-  const [radius, setRadius] = useState(5);
+  const [locationSource, setLocationSource] = useState<
+  "url" | "gps" | "fallback" | "backend-emergency" | null
+>(null);
+const [searchMode, setSearchMode] = useState<
+  "normal" | "emergency"
+>("normal");
+
+const [emergencyLocationError, setEmergencyLocationError] =
+  useState("");
+
+  const [radius, setRadius] = useState(2);
   const [showSOSModal, setShowSOSModal] = useState(false);
   const [hospitals, setHospitals] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+const [recommendedHospitals, setRecommendedHospitals] = useState<any[]>([]);
+
+const [rankingMode, setRankingMode] = useState<
+  "distance-only" | "vesit-demo"
+>("distance-only");
+
+const [matchedDemoHospitalCount, setMatchedDemoHospitalCount] =
+  useState(0);
+
+const [loading, setLoading] = useState(false);
+
+
   const [contacts, setContacts] = useState<string[]>([]);
   const [newContact, setNewContact] = useState("");
   const lastEmergencyId = useRef<string | null>(null);
@@ -121,47 +147,95 @@ export default function HospitalsPage() {
   });
 }, []);
 
-  const detectLocation = () => {
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        // Do not let normal location detection
-        // override an already detected emergency.
-        if (lastEmergencyId.current) {
-          return;
-        }
-
-        setUserPos([
-          pos.coords.latitude,
-          pos.coords.longitude,
-        ]);
-
-        setStep(2);
-      },
-      () => {
-        // Do not let the fallback location
-        // override an already detected emergency.
-        if (lastEmergencyId.current) {
-          return;
-        }
-
-        setUserPos([19.0622, 72.8973]);
-        setStep(2);
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0,
-      }
-    );
+  
+const detectLocation = () => {
+  if (!navigator.geolocation) {
+    setUserPos([19.0622, 72.8973]);
+    setLocationSource("fallback");
+    setStep(2);
+    return;
   }
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      if (lastEmergencyId.current) {
+        return;
+      }
+
+      setUserPos([
+        pos.coords.latitude,
+        pos.coords.longitude,
+      ]);
+
+      setLocationSource("gps");
+      setStep(2);
+    },
+    () => {
+      if (lastEmergencyId.current) {
+        return;
+      }
+
+      setUserPos([19.0622, 72.8973]);
+      setLocationSource("fallback");
+      setStep(2);
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0,
+    }
+  );
 };
 
-  useEffect(() => {
-    const saved = localStorage.getItem("emergency_contacts");
-    if (saved) setContacts(JSON.parse(saved));
-    detectLocation();
-  }, []);
+
+
+  
+useEffect(() => {
+  const saved = localStorage.getItem("emergency_contacts");
+
+  if (saved) {
+    setContacts(JSON.parse(saved));
+  }
+
+  // First, check whether the homepage supplied a location.
+  const params = new URLSearchParams(window.location.search);
+
+  const latParam = params.get("lat");
+  const lngParam = params.get("lng");
+
+  if (
+    latParam !== null &&
+    lngParam !== null &&
+    latParam.trim() !== "" &&
+    lngParam.trim() !== ""
+  ) {
+    const latitude = Number(latParam);
+    const longitude = Number(lngParam);
+
+    const validCoordinates =
+      Number.isFinite(latitude) &&
+      Number.isFinite(longitude) &&
+      latitude >= -90 &&
+      latitude <= 90 &&
+      longitude >= -180 &&
+      longitude <= 180;
+
+    if (validCoordinates) {
+      // Use the selected search location, not live GPS.
+      setUserPos([latitude, longitude]);
+setLocationSource("url");
+setStep(2);
+
+      // Stop here so GPS cannot replace this location.
+      return;
+    }
+  }
+
+  // No valid coordinates in the URL:
+  // retain the existing GPS/fallback behaviour.
+  detectLocation();
+}, []);
+
 
   useEffect(() => {
   let isMounted = true;
@@ -201,6 +275,7 @@ export default function HospitalsPage() {
         emergency.latitude,
         emergency.longitude,
       ]);
+      setLocationSource("backend-emergency");
 
       // Emergency search automatically uses 3 km.
       setRadius(3);
@@ -242,14 +317,29 @@ export default function HospitalsPage() {
     }
   };
 
-  const fetchHospitals = async () => {
-  if (!userPos) return;
+  
+const fetchHospitals = async (
+  requestedRadius: number = radius,
+  emergencySearch: boolean = false,
+  searchPosition: [number, number] | null = userPos
+) => {
+  if (!searchPosition) return;
+
+  
 
   setLoading(true);
 
+  if (emergencySearch) {
+  setRadius(requestedRadius);
+}
+
+  if (emergencySearch) {
+    setEmergencyLocationError("");
+  }
+
   try {
     const response = await fetch(
-      `/api/hospitals/search?latitude=${userPos[0]}&longitude=${userPos[1]}&radius=${radius}`,
+      `/api/hospitals/search?latitude=${searchPosition[0]}&longitude=${searchPosition[1]}&radius=${requestedRadius}`,
       {
         cache: "no-store",
       }
@@ -261,34 +351,128 @@ export default function HospitalsPage() {
       throw new Error(data?.error || "Hospital search failed");
     }
 
-    const sortedHospitals = [...(data.hospitals || [])].sort(
-  (a, b) => {
-    const distanceA =
-      typeof a.distanceKm === "number"
-        ? a.distanceKm
-        : Number.MAX_SAFE_INTEGER;
+    const hospitalResults = Array.isArray(data?.hospitals)
+      ? data.hospitals
+      : [];
 
-    const distanceB =
-      typeof b.distanceKm === "number"
-        ? b.distanceKm
-        : Number.MAX_SAFE_INTEGER;
-
-    return distanceA - distanceB;
-  }
+    const rankingResult = await rankHospitalsWithDemoReviews(
+  hospitalResults,
+  searchPosition[0],
+  searchPosition[1],
+  emergencySearch ? "emergency" : "normal"
 );
 
-setHospitals(sortedHospitals);
-setStep(4);
+setHospitals(rankingResult.hospitals);
+
+setRecommendedHospitals(
+  rankingResult.hospitals.slice(0, 10)
+);
+
+setRankingMode(rankingResult.mode);
+
+setMatchedDemoHospitalCount(
+  rankingResult.matchedHospitalCount
+);
+
+    setStep(4);
   } catch (err) {
     console.error("Hospital Search Error:", err);
 
-    alert(
-      "Medical database is busy. Please try again in a moment."
-    );
+    if (emergencySearch) {
+      setEmergencyLocationError(
+        "Hospital search is temporarily unavailable. Please try again."
+      );
+    } else {
+      alert(
+  "Hospital data service is temporarily unavailable. Please try again in a moment."
+);
+    }
   } finally {
     setLoading(false);
   }
 };
+
+
+const startEmergencySearch = () => {
+  setSearchMode("emergency");
+  setEmergencyLocationError("");
+
+  if (
+    !userPos ||
+    (locationSource !== "gps" && locationSource !== "url")
+  ) {
+    setEmergencyLocationError(
+      "Emergency search needs a verified live location or a location selected manually. The fallback location cannot be used."
+    );
+    return;
+  }
+
+  void fetchHospitals(2, true, userPos);
+};
+
+const retryEmergencyGps = () => {
+  setEmergencyLocationError("");
+
+  if (!navigator.geolocation) {
+    setEmergencyLocationError(
+      "Live location is not supported by this browser. Please choose a location manually."
+    );
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const coordinates: [number, number] = [
+        position.coords.latitude,
+        position.coords.longitude,
+      ];
+
+      setUserPos(coordinates);
+      setLocationSource("gps");
+      setRadius(2);
+      setEmergencyLocationError("");
+
+      void fetchHospitals(2, true, coordinates);
+    },
+    () => {
+      setEmergencyLocationError(
+        "We couldn't detect your live location. Please try again or choose a location manually."
+      );
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0,
+    }
+  );
+};
+
+
+const nearestHospital = hospitals.reduce<any>(
+  (nearest, current) => {
+    const currentDistance = getHospitalDistance(current);
+
+    const nearestDistance = nearest
+      ? getHospitalDistance(nearest)
+      : null;
+
+    if (currentDistance === null) {
+      return nearest;
+    }
+
+    if (
+      nearestDistance === null ||
+      currentDistance < nearestDistance
+    ) {
+      return current;
+    }
+
+    return nearest;
+  },
+  null
+);
+
+
 
   return (
     <div className="relative h-screen w-full bg-slate-50 overflow-hidden">
@@ -325,15 +509,82 @@ setStep(4);
         </div>
       )}
 
-      {step === 2 && (
-        <div className="absolute inset-0 z-[2500] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6">
-          <div className="bg-white rounded-[40px] p-10 w-full max-w-sm text-center shadow-2xl">
-            <h3 className="text-2xl font-black text-black">Location Found</h3>
-            <p className="text-slate-500 text-sm mt-3 mb-8">Search for hospitals in this area?</p>
-            <button onClick={() => setStep(3)} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-xl">START SEARCH</button>
-          </div>
+      
+{step === 2 && (
+  <div className="absolute inset-0 z-[2500] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6">
+    <div className="bg-white rounded-[40px] p-8 w-full max-w-sm text-center shadow-2xl">
+      <h3 className="text-2xl font-black text-black">
+        {locationSource === "fallback"
+          ? "Location Needs Confirmation"
+          : "Location Ready"}
+      </h3>
+
+      <p className="text-slate-500 text-sm mt-3 mb-6">
+        Choose how you want to search for nearby hospitals.
+      </p>
+
+      <div className="flex flex-col gap-3">
+        <button
+          type="button"
+          onClick={() => {
+            setSearchMode("normal");
+            setEmergencyLocationError("");
+            setStep(3);
+          }}
+          className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-xl"
+        >
+          NORMAL SEARCH
+        </button>
+
+        <button
+          type="button"
+          onClick={startEmergencySearch}
+          disabled={loading}
+          className="w-full bg-red-600 text-white py-4 rounded-2xl font-black shadow-xl disabled:opacity-60"
+        >
+          {loading
+            ? "SEARCHING..."
+            : "EMERGENCY MODE · 2 KM"}
+        </button>
+      </div>
+
+      {locationSource === "fallback" && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3 mt-4 text-left">
+          Live location could not be detected. Emergency
+          Mode will not use the fallback location.
+        </p>
+      )}
+
+      {emergencyLocationError && (
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-left">
+          <p className="text-xs text-red-800">
+            {emergencyLocationError}
+          </p>
+
+          <button
+            type="button"
+            onClick={retryEmergencyGps}
+            disabled={loading}
+            className="w-full mt-3 bg-red-600 text-white rounded-lg py-3 text-xs font-black disabled:opacity-60"
+          >
+            RETRY GPS
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = "/";
+            }}
+            className="w-full mt-2 border border-slate-300 bg-white text-slate-800 rounded-lg py-3 text-xs font-black"
+          >
+            CHOOSE LOCATION MANUALLY
+          </button>
         </div>
       )}
+    </div>
+  </div>
+)}
+
 
       {step === 3 && (
         <div className="absolute inset-0 z-[2400] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6">
@@ -342,8 +593,15 @@ setStep(4);
               <span className="font-black text-black uppercase text-[11px]">Radius</span>
               <span className="bg-blue-600 text-white px-2 py-1 rounded text-xs">{radius} KM</span>
             </div>
-            <input type="range" min="1" max="25" value={radius} onChange={(e) => setRadius(parseInt(e.target.value))} className="w-full mb-8" />
-            <button onClick={fetchHospitals} disabled={loading} className="w-full bg-blue-600 text-white py-5 rounded-[24px] font-bold">
+            <input
+  type="range"
+  min="1"
+  max="5"
+  value={radius}
+  onChange={(e) => setRadius(parseInt(e.target.value, 10))}
+  className="w-full mb-8"
+/>
+            <button onClick={() => fetchHospitals()} disabled={loading} className="w-full bg-blue-600 text-white py-5 rounded-[24px] font-bold">
               {loading ? "SEARCHING..." : "FIND HOSPITALS"}
             </button>
           </div>
@@ -352,7 +610,12 @@ setStep(4);
 
       <div className={`h-full w-full ${step < 4 ? "blur-xl" : ""}`}>
         <MapContainer center={userPos || [19.0622, 72.8973]} zoom={15} className="h-full w-full" zoomControl={false}>
-          <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" />
+          <TileLayer
+  url={`https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=${process.env.NEXT_PUBLIC_CARTO_API_KEY}`}
+  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+  subdomains={["a", "b", "c", "d"]}
+  maxZoom={20}
+/>
           {userPos && (
             <>
               <MapManager center={userPos} zoom={step === 4 ? 14 : 15} />
@@ -366,7 +629,17 @@ setStep(4);
                   <Popup>
                     <div className="p-2 text-center">
                       <h4 className="font-black text-slate-900 text-sm mb-2">{h.tags?.name || "Hospital"}</h4>
-                      <a href={`https://www.google.com/maps/dir/?api=1&origin=${userPos?.[0]},${userPos?.[1]}&destination=${h.lat},${h.lon}`} target="_blank" className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold no-underline block">DIRECTIONS</a>
+
+<a
+  href={`https://www.google.com/maps/dir/?api=1&origin=${userPos?.[0]},${userPos?.[1]}&destination=${h.lat},${h.lon}`}
+  target="_blank"
+  rel="noopener noreferrer"
+  className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold no-underline block"
+  style={{ backgroundColor: "#2563eb", color: "#ffffff" }}
+>
+  DIRECTIONS
+</a>
+
                     </div>
                   </Popup>
                 </Marker>
@@ -391,24 +664,39 @@ setStep(4);
               </h2>
 
               <p className="text-xs text-slate-500 mt-1">
-                Ranked by distance
-              </p>
+  {searchMode === "emergency"
+  ? rankingMode === "vesit-demo"
+    ? "Emergency priority: distance 70%, demo rating 20%, sentiment 10%"
+    : "Emergency priority: distance only (no matched demo reviews)"
+  : rankingMode === "vesit-demo"
+    ? "Ranked by distance, demo rating & sentiment"
+    : "Ranked by distance"}
+</p>
             </div>
 
             <div className="bg-blue-600 text-white px-3 py-2 rounded-xl text-xs font-black">
-              {hospitals.length}
+              Top {recommendedHospitals.length}
             </div>
           </div>
 
           <p className="text-[11px] text-slate-400 mt-3">
             Hospitals within {radius} km
           </p>
+          {rankingMode === "vesit-demo" &&
+  matchedDemoHospitalCount > 0 && (
+    <p className="text-[10px] leading-4 text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-3">
+      SIMULATED DEMO DATA — Ratings and review text
+      are synthetic examples for testing only, not
+      actual patient feedback. Hospitals without
+      matching demo data are ranked by distance alone.
+    </p>
+  )}
         </div>
 
         {/* Hospital List */}
         <div className="max-h-[65vh] overflow-y-auto p-3">
 
-          {hospitals.length === 0 ? (
+          {recommendedHospitals.length === 0 ? (
             <div className="p-6 text-center">
               <p className="text-sm font-bold text-slate-600">
                 No hospitals found
@@ -419,13 +707,17 @@ setStep(4);
               </p>
             </div>
           ) : (
-            hospitals.map((hospital, index) => {
+            recommendedHospitals.map((hospital, index) => {
               const name = getHospitalName(hospital);
               const distance = getHospitalDistance(hospital);
               const mapsUrl = getHospitalMapsUrl(
                 hospital,
                 userPos
               );
+
+              
+
+
 
               return (
                 <div
@@ -444,11 +736,17 @@ setStep(4);
     {index + 1}
   </div>
 
-  {index === 0 && (
-    <span className="text-[8px] font-black text-emerald-600 uppercase whitespace-nowrap">
-      Nearest
-    </span>
-  )}
+  {hospital === nearestHospital && (
+  <span className="text-[8px] font-black text-blue-600 uppercase whitespace-nowrap">
+    Nearest
+  </span>
+)}
+
+{rankingMode === "vesit-demo" && index === 0 && (
+  <span className="text-[8px] font-black text-emerald-600 uppercase whitespace-nowrap">
+    Top Pick
+  </span>
+)}
 </div>
 
                     {/* Hospital Details */}
@@ -462,7 +760,44 @@ setStep(4);
   <p className="text-xs text-slate-500 mt-1">
     {formatHospitalDistance(distance)}
   </p>
+  
 )}
+
+
+{rankingMode === "vesit-demo" &&
+  hospital.hasSimulatedDemoData && (
+    <div className="mt-2 rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-bold text-slate-700">
+          Demo rating
+        </span>
+
+        <span className="text-sm font-black text-slate-900">
+          ★ {hospital.demoRating.toFixed(1)}/5
+        </span>
+      </div>
+
+      <p className="text-[11px] text-slate-500 mt-1">
+        {hospital.demoReviewCount} simulated reviews
+      </p>
+
+      <p className="text-xs text-slate-600 mt-2">
+  Sentiment: {hospital.demoSentimentLabel}
+</p>
+
+<div className="flex items-center justify-between gap-2 mt-2">
+  <span className="text-[11px] text-slate-500">
+    Recommendation score
+  </span>
+
+  <span className="text-xs font-bold text-blue-700">
+    {hospital.recommendationScore}/100
+  </span>
+</div>
+    </div>
+  )}
+
+
 
                       <a
                         href={mapsUrl}
@@ -486,13 +821,15 @@ setStep(4);
       </div>
     </div>
 
-    {/* Change Radius */}
-    <button
-      onClick={() => setStep(3)}
-      className="absolute bottom-8 left-1/2 -translate-x-1/2 z-[2000] bg-white text-black px-6 py-3 rounded-full font-black text-xs shadow-xl border"
-    >
-      CHANGE RADIUS
-    </button>
+    {/* Keep the radius fixed in user-selected Emergency Mode */}
+{searchMode !== "emergency" && (
+  <button
+    onClick={() => setStep(3)}
+    className="absolute bottom-8 left-1/2 -translate-x-1/2 z-[2000] bg-white text-black px-6 py-3 rounded-full font-black text-xs shadow-xl border"
+  >
+    CHANGE RADIUS
+  </button>
+)}
   </>
 )}
     </div>

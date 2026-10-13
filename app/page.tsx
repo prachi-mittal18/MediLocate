@@ -7,6 +7,17 @@ import { useRouter } from "next/navigation";
 
 type Status = "idle" | "loading" | "success" | "error";
 
+type GeocodedLocation = {
+  placeId?: number;
+  osmType?: string;
+  osmId?: number;
+  displayName: string;
+  lat: number;
+  lon: number;
+  address?: Record<string, string>;
+};
+
+
 export default function Home() {
   const router = useRouter();
 
@@ -14,6 +25,13 @@ export default function Home() {
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [manualLocation, setManualLocation] = useState("");
   const [message, setMessage] = useState("");
+  
+const [locationResults, setLocationResults] = useState<
+  GeocodedLocation[]
+>([]);
+const [locationSearchMessage, setLocationSearchMessage] = useState("");
+const [searchingLocation, setSearchingLocation] = useState(false);
+
 
   // Try auto-location on first load
   useEffect(() => {
@@ -49,19 +67,87 @@ export default function Home() {
   const hasLocation =
     status === "success" || manualLocation.trim().length > 0;
 
-  const handleContinue = () => {
-    const params = new URLSearchParams();
+  
+const handleContinue = async () => {
+  const typedLocation = manualLocation.trim();
 
-    if (coords) {
-      params.set("lat", coords.lat.toString());
-      params.set("lng", coords.lng.toString());
+  // A typed location takes priority over detected GPS coordinates.
+  if (typedLocation) {
+    setSearchingLocation(true);
+    setLocationSearchMessage("");
+    setLocationResults([]);
+
+    try {
+      const response = await fetch(
+        `/api/geocode?q=${encodeURIComponent(typedLocation)}`,
+        { cache: "no-store" }
+      );
+
+      const data = (await response.json()) as {
+        locations?: GeocodedLocation[];
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || "Location lookup failed."
+        );
+      }
+
+      const results = Array.isArray(data.locations)
+        ? data.locations
+        : [];
+
+      setLocationResults(results);
+
+      setLocationSearchMessage(
+        results.length > 0
+          ? "Select the correct location below."
+          : "No matching locations found. Try adding the city and state."
+      );
+    } catch (error) {
+      console.error("Location lookup failed:", error);
+
+      setLocationSearchMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not look up this location. Please try again."
+      );
+    } finally {
+      setSearchingLocation(false);
     }
-    if (manualLocation.trim()) {
-      params.set("location", manualLocation.trim());
-    }
+
+    return;
+  }
+
+  // No typed location: continue using the detected GPS coordinates.
+  if (coords) {
+    const params = new URLSearchParams({
+      lat: coords.lat.toString(),
+      lng: coords.lng.toString(),
+    });
 
     router.push(`/hospitals?${params.toString()}`);
-  };
+    return;
+  }
+
+  setMessage(
+    "Please use your current location or enter an area manually."
+  );
+};
+
+const handleSelectLocation = (
+  location: GeocodedLocation
+) => {
+  const params = new URLSearchParams({
+    lat: location.lat.toString(),
+    lng: location.lon.toString(),
+    location: location.displayName,
+  });
+
+  router.push(`/hospitals?${params.toString()}`);
+};
+
 
   return (
     <main className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -155,20 +241,67 @@ export default function Home() {
           <input
             type="text"
             value={manualLocation}
-            onChange={(e) => setManualLocation(e.target.value)}
+            
+onChange={(e) => {
+  setManualLocation(e.target.value);
+  setLocationResults([]);
+  setLocationSearchMessage("");
+}}
+
             placeholder="City, locality (e.g., Nagpur, Maharashtra)"
             className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
           />
           <p className="text-xs text-slate-500">
             This helps show hospitals relevant to your area.
           </p>
+          
+{locationSearchMessage && (
+  <p
+    role="status"
+    className={`text-xs ${
+      locationResults.length > 0
+        ? "text-emerald-600"
+        : "text-red-600"
+    }`}
+  >
+    {locationSearchMessage}
+  </p>
+)}
+
+{locationResults.length > 0 && (
+  <div className="space-y-2 pt-2">
+    <p className="text-xs font-semibold text-slate-700">
+      Choose the matching location:
+    </p>
+
+    {locationResults.map((location, index) => (
+      <button
+        key={`${location.osmType ?? "place"}-${
+          location.osmId ?? location.placeId ?? index
+        }`}
+        type="button"
+        onClick={() => handleSelectLocation(location)}
+        className="w-full rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:border-sky-500 hover:bg-sky-50"
+      >
+        <span className="block text-sm font-medium text-slate-900">
+          {location.displayName}
+        </span>
+
+        <span className="mt-1 block text-xs text-slate-500">
+          {location.lat.toFixed(5)}, {location.lon.toFixed(5)}
+        </span>
+      </button>
+    ))}
+  </div>
+)}
+
         </div>
 
         {/* Continue */}
         <div className="pt-2 space-y-2">
           <button
             type="button"
-            disabled={!hasLocation}
+            disabled={!hasLocation || searchingLocation}
             onClick={handleContinue}
             className={`w-full rounded-lg px-4 py-2 text-sm font-semibold text-white transition ${
               hasLocation
@@ -176,7 +309,13 @@ export default function Home() {
                 : "bg-slate-300 cursor-not-allowed"
             }`}
           >
-            Continue
+            
+{searchingLocation
+  ? "SEARCHING LOCATION..."
+  : manualLocation.trim()
+  ? "SEARCH LOCATION"
+  : "CONTINUE"}
+
           </button>
         </div>
       </div>
