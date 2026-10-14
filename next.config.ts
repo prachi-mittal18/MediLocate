@@ -1,7 +1,16 @@
+
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  turbopack: {
+    root: __dirname,
+  },
+
+  logging: {
+    incomingRequests: {
+      ignore: [/\/api\/emergency\/status/],
+    },
+  },
 };
 
 export default nextConfig;

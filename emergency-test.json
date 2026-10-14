@@ -1,0 +1,13 @@
+{
+  "deviceId": "SIM-WATCH-001",
+  "eventType": "POTENTIAL_EMERGENCY",
+  "severity": "HIGH",
+  "latitude": 19.0760,
+  "longitude": 72.8777,
+  "sensorData": {
+    "acceleration": 7.1,
+    "rotation": 6.2,
+    "heartRate": 145,
+    "movement": false
+  }
+}
