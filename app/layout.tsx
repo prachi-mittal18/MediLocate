@@ -1,4 +1,6 @@
+
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -13,8 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MediLocate Pro",
-  description: "Find nearby hospitals and get emergency help fast.",
+  title: "MediLocate | Hospital Discovery",
+  description:
+    "Discover nearby hospitals through location-based search and multi-criteria recommendations.",
 };
 
 export default function RootLayout({
@@ -24,14 +27,40 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>
-        <header style={{ padding: "1rem", borderBottom: "1px solid #ddd" }}>
-          <a href="/" style={{ marginRight: "1rem" }}>Home</a>
-          <a href="/about">About</a>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      >
+        <header className="border-b border-slate-200 bg-white">
+          <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3">
+            <Link
+              href="/"
+              className="text-lg font-bold text-slate-900"
+            >
+              MediLocate
+            </Link>
+
+            <nav
+              aria-label="Main navigation"
+              className="flex items-center gap-2"
+            >
+              <Link
+                href="/"
+                className="rounded-lg px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              >
+                Home
+              </Link>
+
+              <Link
+                href="/about"
+                className="rounded-lg px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              >
+                About
+              </Link>
+            </nav>
+          </div>
         </header>
+
         {children}
-
-
       </body>
     </html>
   );

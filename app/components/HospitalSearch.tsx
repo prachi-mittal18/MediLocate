@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 
+
 export default function HospitalSearch() {
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);

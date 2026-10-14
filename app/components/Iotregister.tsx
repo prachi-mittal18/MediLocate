@@ -2,11 +2,11 @@
 
 import { useState } from 'react';
 
-interface IotRegisterProps {
-  onSuccess?: (userId: string) => void;
+interface IotRegistrationProps {
+  onSuccess?: (userId: number) => void;
 }
 
-export default function IotRegister({ onSuccess }: IotRegisterProps) {
+export default function IotRegistration({ onSuccess }: IotRegistrationProps) {
   const [formData, setFormData] = useState({
     email: '',
     name: '',
